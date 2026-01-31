@@ -29,14 +29,18 @@ jobs:
             make
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-pkgconf
-      - uses: actions/checkout@v4
-      - run: |
-          echo "Using MSYS2 environment:"
+      - name: Build lutro core
+        shell: C:\msys64\usr\bin\bash.exe --login -eo pipefail {0}
+        uses: actions/checkout@v4
+        run: |
           echo "MSYSTEM=$MSYSTEM"
           echo "PATH=$PATH"
-          echo "CC=$CC"
-      - run:                 make -j4 platform=win config=tool   
-      - run: git clean -f && make -j4 platform=win config=player
+          echo "Using CC: $(which gcc)"
+
+          # Build using the same flags as the libretro buildbot
+          make -j4 platform=win config=player
+
+          echo "Build completed."
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
