@@ -30,6 +30,19 @@ jobs:
             make
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-pkgconf
+    
+      - name: Install toolchain inside MSYS2
+        shell: C:\msys64\usr\bin\bash.exe --login -eo pipefail {0}
+        run: |
+          pacman -S --noconfirm --needed \
+            git \
+            make \
+            mingw-w64-x86_64-gcc \
+            mingw-w64-x86_64-pkgconf
+
+          which gcc
+          which make
+        
       - name: Build lutro core
         shell: C:\msys64\usr\bin\bash.exe --login -eo pipefail {0}
         run: |
