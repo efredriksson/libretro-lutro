@@ -20,5 +20,18 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - run:                 CC=gcc make -j4 platform=win config=tool   
-      - run: git clean -f && CC=gcc make -j4 platform=win config=player
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: make mingw-w64-x86_64-gcc
+      - name: build
+        shell: msys2 {0}
+        run: |
+          cd "${{ github.workspace }}"
+          make -j4 platform=win config=player
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: lutro-core
+          path: lutro_libretro.dll
