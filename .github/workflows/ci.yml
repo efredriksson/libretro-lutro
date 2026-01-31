@@ -20,49 +20,16 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install MSYS2
-        uses: msys2/setup-msys2@v2
+      - uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
           update: true
-          install: >
-            git
-            make
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-pkgconf
-    
-      - name: Install toolchain inside MSYS2
-        shell: C:\msys64\usr\bin\bash.exe --login -eo pipefail {0}
+          install: make mingw-w64-x86_64-gcc
+      - name: build
+        shell: msys2 {0}
         run: |
-          pacman -S --noconfirm --needed \
-            git \
-            make \
-            mingw-w64-x86_64-gcc \
-            mingw-w64-x86_64-pkgconf
-
-          which gcc
-          which make
-        
-      - name: Build lutro core
-        shell: C:\msys64\usr\bin\bash.exe --login -eo pipefail {0}
-        run: |
-          echo "MSYSTEM=$MSYSTEM"
-          echo "PATH=$PATH"
-
-          # Change directory to repo inside MSYS2
           cd "${{ github.workspace }}"
-
-          echo "Current dir: $(pwd)"
-          echo "Files:"
-          ls -la
-
-          echo "GCC: $(which gcc)"
-          echo "MAKE: $(which make)"
-
-          # Build using the same flags as the libretro buildbot
           make -j4 platform=win config=player
-
-          echo "Build completed."
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
