@@ -19,6 +19,7 @@ jobs:
   build_windows:
     runs-on: windows-latest
     steps:
+      - uses: actions/checkout@v4
       - name: Install MSYS2
         uses: msys2/setup-msys2@v2
         with:
@@ -31,7 +32,6 @@ jobs:
             mingw-w64-x86_64-pkgconf
       - name: Build lutro core
         shell: C:\msys64\usr\bin\bash.exe --login -eo pipefail {0}
-        uses: actions/checkout@v4
         run: |
           echo "MSYSTEM=$MSYSTEM"
           echo "PATH=$PATH"
