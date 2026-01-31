@@ -48,7 +48,16 @@ jobs:
         run: |
           echo "MSYSTEM=$MSYSTEM"
           echo "PATH=$PATH"
-          echo "Using CC: $(which gcc)"
+
+          # Change directory to repo inside MSYS2
+          cd "${{ github.workspace }}"
+
+          echo "Current dir: $(pwd)"
+          echo "Files:"
+          ls -la
+
+          echo "GCC: $(which gcc)"
+          echo "MAKE: $(which make)"
 
           # Build using the same flags as the libretro buildbot
           make -j4 platform=win config=player
