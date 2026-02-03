@@ -59,7 +59,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: build
-        run: make -j4 config=player
+        run: make -j4 config=player WANT_JIT=1
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
