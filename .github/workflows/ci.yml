@@ -54,3 +54,14 @@ jobs:
         with:
           name: lutro-core-jit
           path: lutro_libretro.dll
+  build_linux_arm64:
+    runs-on: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: build
+        run: make -j4 config=player WANT_JIT=1
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: lutro-core-recallbox
+          path: lutro_libretro.so
