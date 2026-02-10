@@ -1,0 +1,12 @@
+diff --git a/lutro.c b/lutro.c
+index d4de6a0..b294c74 100644
+--- a/lutro.c
++++ b/lutro.c
+@@ -524,6 +524,7 @@ int lutro_load(const char *path)
+    {
+       fill_pathname(gamedir, mainfile, "/", sizeof(gamedir));
+       fill_pathname(gamedir, conffile, "/", sizeof(gamedir));
++      strncpy(gamedir, "/tmp/lutro", sizeof(gamedir));
+       lutro_unzip(mainfile, gamedir);
+    }
+ 
