@@ -227,6 +227,8 @@ static void init_feature_flags(lua_State *L)
    CAPABILITY(HAVE_INOTIFY);
    CAPABILITY(HAVE_JIT);
    CAPABILITY(HAVE_LUASOCKET);
+   #define HAVE_16_JOYSTICKS 1
+   CAPABILITY(HAVE_16_JOYSTICKS);
 
    // for unit testing purposes only.
    #define _VERIFY_AS_TRUE  1
