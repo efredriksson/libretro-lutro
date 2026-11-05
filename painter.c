@@ -25,6 +25,20 @@
    R = ((COLOR & RED_MASK) >> RED_SHIFT);\
    G = ((COLOR & GREEN_MASK) >> GREEN_SHIFT);\
    B = ((COLOR & BLUE_MASK) >> BLUE_SHIFT);
+
+static inline uint32_t compose_pixel(uint32_t s, uint32_t d)
+{
+   uint32_t sa = s >> 24;
+   if (sa == 255)
+      return s;
+   if (sa == 0)
+      return d;
+
+   uint32_t da = d >> 24, sr, sg, sb, dr, dg, db;
+   DISASSEMBLE_RGB(s, sr, sg, sb);
+   DISASSEMBLE_RGB(d, dr, dg, db);
+   return (COMPOSE_ALPHA(sa, da) << 24) | (COMPOSE_FAST(sr, dr, sa) << 16) | (COMPOSE_FAST(sg, dg, sa) << 8) | (COMPOSE_FAST(sb, db, sa));
+}
 #endif
 
 static int strpos(const uint32_t *haystack, uint32_t needle)
@@ -160,23 +174,18 @@ void pntr_fill_rect(painter_t *p, const rect_t *rect)
       return;
 
 #ifdef HAVE_COMPOSITION
-   uint32_t sa, sr, sg, sb, da, dr, dg, db, s, d;
-   do
+   if ((color >> 24) != 255)
    {
-      for (x = drect.x; x < xend; ++x)
+      do
       {
-         s = color;
-         d = row[x];
-         sa = s >> 24;
-         da = d >> 24;
-         DISASSEMBLE_RGB(s, sr, sg, sb);
-         DISASSEMBLE_RGB(d, dr, dg, db);
-         row[x] = (COMPOSE_ALPHA(sa, da) << 24) | (COMPOSE_FAST(sr, dr, sa) << 16) | (COMPOSE_FAST(sg, dg, sa) << 8) | (COMPOSE_FAST(sb, db, sa));
-      }
+         for (x = drect.x; x < xend; ++x)
+            row[x] = compose_pixel(color, row[x]);
 
-      row += row_size;
-   } while (row < end);
-#else
+         row += row_size;
+      } while (row < end);
+      return;
+   }
+#endif
    do
    {
       for (x = drect.x; x < xend; ++x)
@@ -184,7 +193,6 @@ void pntr_fill_rect(painter_t *p, const rect_t *rect)
 
       row += row_size;
    } while (row < end);
-#endif
 }
 
 
@@ -345,6 +353,25 @@ void pntr_fill_ellipse(painter_t *p, int x, int y, int radius_x, int radius_y, i
    }
 }
 
+static void blit_rows(uint32_t *dst, size_t dst_skip, const uint32_t *src, size_t src_skip, int cols, int rows)
+{
+   int x;
+   while (rows--)
+   {
+      for (x = 0; x < cols; ++x)
+      {
+#ifdef HAVE_COMPOSITION
+         dst[x] = compose_pixel(src[x], dst[x]);
+#else
+         if (src[x] & 0xff000000)
+            dst[x] = src[x];
+#endif
+      }
+      dst += dst_skip;
+      src += src_skip;
+   }
+}
+
 void pntr_draw(painter_t *p, const bitmap_t *bmp, const rect_t *src_rect, const rect_t *dst_rect)
 {
    if (!p->target->data)
@@ -474,13 +501,17 @@ void pntr_draw(painter_t *p, const bitmap_t *bmp, const rect_t *src_rect, const 
    int x = 0;
 
 #ifdef HAVE_TRANSFORM
+   if (!is_x_reversed && !is_y_reversed && inv_scale_x == (1U << k_binexp) && inv_scale_y == (1U << k_binexp))
+#endif
+   {
+      blit_rows(dst, dst_skip, src, src_skip, cols, rows_left);
+      return;
+   }
+
+#ifdef HAVE_TRANSFORM
    uint32_t y = 0;
 #endif
-#ifdef HAVE_COMPOSITION
-   uint32_t sa, sr, sg, sb, da, dr, dg, db, s, d;
-#else
    uint32_t s;
-#endif
    while (rows_left--)
    {
       for (x = 0; x < cols; ++x)
@@ -495,12 +526,7 @@ void pntr_draw(painter_t *p, const bitmap_t *bmp, const rect_t *src_rect, const 
          s = src[x];
 #endif
 #ifdef HAVE_COMPOSITION
-         d = dst[x];
-         sa = s >> 24;
-         da = d >> 24;
-         DISASSEMBLE_RGB(s, sr, sg, sb);
-         DISASSEMBLE_RGB(d, dr, dg, db);
-         dst[x] = (COMPOSE_ALPHA(sa, da) << 24) | (COMPOSE_FAST(sr, dr, sa) << 16) | (COMPOSE_FAST(sg, dg, sa) << 8) | (COMPOSE_FAST(sb, db, sa));
+         dst[x] = compose_pixel(s, dst[x]);
 #else
          if (s & 0xff000000)
          dst[x] = s;
