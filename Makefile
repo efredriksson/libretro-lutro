@@ -614,6 +614,8 @@ deps/luajit/src/libluajit.a:
 # LuaJIT generates luajit.h at build time; lutro.c includes it.
 ifeq ($(WANT_JIT),1)
 $(OBJS): | deps/luajit/src/luajit.h
+# One make in deps/luajit/src at a time: two at once race on its build checks.
+deps/luajit/src/libluajit.a: | deps/luajit/src/luajit.h
 deps/luajit/src/luajit.h:
 	$(MAKE) -C deps/luajit/src CC="$(CC)" Q= luajit.h
 endif
