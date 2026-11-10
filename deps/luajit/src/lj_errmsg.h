@@ -1,6 +1,6 @@
 /*
 ** VM error messages.
-** Copyright (C) 2005-2022 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2026 Mike Pall. See Copyright Notice in luajit.h
 */
 
 /* This file may be included multiple times with different ERRDEF macros. */
@@ -79,6 +79,7 @@ ERRDEF(SETFENV,	LUA_QL("setfenv") " cannot change environment of given object")
 ERRDEF(CORUN,	"cannot resume running coroutine")
 ERRDEF(CODEAD,	"cannot resume dead coroutine")
 ERRDEF(COSUSP,	"cannot resume non-suspended coroutine")
+ERRDEF(PRNGSD,	"PRNG seeding failed")
 ERRDEF(TABINS,	"wrong number of arguments to " LUA_QL("insert"))
 ERRDEF(TABCAT,	"invalid value (%s) at index %d in table for " LUA_QL("concat"))
 ERRDEF(TABSORT,	"invalid order function for sorting")
@@ -139,9 +140,14 @@ ERRDEF(XDOTS,	"cannot use " LUA_QL("...") " outside a vararg function")
 ERRDEF(XSYNTAX,	"syntax error")
 ERRDEF(XFOR,	LUA_QL("=") " or " LUA_QL("in") " expected")
 ERRDEF(XBREAK,	"no loop to break")
+ERRDEF(XCONT,	"no loop to continue")
 ERRDEF(XLUNDEF,	"undefined label " LUA_QS)
 ERRDEF(XLDUP,	"duplicate label " LUA_QS)
 ERRDEF(XGSCOPE,	"<goto %s> jumps into the scope of local " LUA_QS)
+ERRDEF(XCSCOPE,	"<continue> jumps into the scope of local " LUA_QS)
+ERRDEF(XCONSTA,	"attempt to assign to const variable " LUA_QS)
+ERRDEF(XCONSTR,	"attempt to re-declare const variable " LUA_QS)
+ERRDEF(XLINEDIR,	"malformed line number directive")
 
 /* Bytecode reader errors. */
 ERRDEF(BCFMT,	"cannot load incompatible bytecode")

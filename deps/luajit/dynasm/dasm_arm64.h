@@ -1,6 +1,6 @@
 /*
 ** DynASM ARM64 encoding engine.
-** Copyright (C) 2005-2022 Mike Pall. All rights reserved.
+** Copyright (C) 2005-2026 Mike Pall. All rights reserved.
 ** Released under the MIT license. See dynasm.lua for full copyright notice.
 */
 
@@ -72,7 +72,7 @@ struct dasm_State {
   size_t lgsize;
   int *pclabels;		/* PC label chains/pos ptrs. */
   size_t pcsize;
-  void **globals;		/* Array of globals (bias -10). */
+  void **globals;		/* Array of globals. */
   dasm_Section *section;	/* Pointer to active section. */
   size_t codesize;		/* Total size of all code sections. */
   int maxsection;		/* 0 <= sectionidx < maxsection. */
@@ -89,7 +89,6 @@ void dasm_init(Dst_DECL, int maxsection)
 {
   dasm_State *D;
   size_t psz = 0;
-  int i;
   Dst_REF = NULL;
   DASM_M_GROW(Dst, struct dasm_State, Dst_REF, psz, DASM_PSZ(maxsection));
   D = Dst_REF;
@@ -100,12 +99,7 @@ void dasm_init(Dst_DECL, int maxsection)
   D->pcsize = 0;
   D->globals = NULL;
   D->maxsection = maxsection;
-  for (i = 0; i < maxsection; i++) {
-    D->sections[i].buf = NULL;  /* Need this for pass3. */
-    D->sections[i].rbuf = D->sections[i].buf - DASM_SEC2POS(i);
-    D->sections[i].bsize = 0;
-    D->sections[i].epos = 0;  /* Wrong, but is recalculated after resize. */
-  }
+  memset((void *)D->sections, 0, maxsection * sizeof(dasm_Section));
 }
 
 /* Free DynASM state. */
@@ -125,7 +119,7 @@ void dasm_free(Dst_DECL)
 void dasm_setupglobal(Dst_DECL, void **gl, unsigned int maxgl)
 {
   dasm_State *D = Dst_REF;
-  D->globals = gl - 10;  /* Negative bias to compensate for locals. */
+  D->globals = gl;
   DASM_M_GROW(Dst, int, D->lglabels, D->lgsize, (10+maxgl)*sizeof(int));
 }
 
@@ -150,6 +144,7 @@ void dasm_setup(Dst_DECL, const void *actionlist)
   if (D->pclabels) memset((void *)D->pclabels, 0, D->pcsize);
   for (i = 0; i < D->maxsection; i++) {
     D->sections[i].pos = DASM_SEC2POS(i);
+    D->sections[i].rbuf = D->sections[i].buf - D->sections[i].pos;
     D->sections[i].ofs = 0;
   }
 }
@@ -177,44 +172,46 @@ static int dasm_imm12(unsigned int n)
     return -1;
 }
 
-static int dasm_ffs(unsigned long long x)
+#if defined(__GNUC__) || defined(__clang__)
+#define dasm_ctz(x) __builtin_ctzll(x)
+#define dasm_clz(x) __builtin_clzll(x)
+#else
+static int dasm_ctz(unsigned long long x)
 {
-  int n = -1;
-  while (x) { x >>= 1; n++; }
+  int n = 0;
+  x = ~x;
+  while (x & 1) { x >>= 1; n++; }
   return n;
+}
+
+static int dasm_clz(unsigned long long x)
+{
+  int n = 0;
+  x = ~x;
+  while ((long long)x < 0) { x <<= 1; n++; }
+  return n;
+}
+#endif
+
+static unsigned long long dasm_ror(unsigned long long x, int n)
+{
+  return (x << (-n & 63)) | (x >> n);
 }
 
 static int dasm_imm13(int lo, int hi)
 {
-  int inv = 0, w = 64, s = 0xfff, xa, xb;
+  /* Thanks to: https://dougallj.wordpress.com/2021/10/30/ */
+  int rot, ones, size, immr, imms;
   unsigned long long n = (((unsigned long long)hi) << 32) | (unsigned int)lo;
-  unsigned long long m = 1ULL, a, b, c;
-  if (n & 1) { n = ~n; inv = 1; }
-  a = n & (unsigned long long)-(long long)n;
-  b = (n+a)&(unsigned long long)-(long long)(n+a);
-  c = (n+a-b)&(unsigned long long)-(long long)(n+a-b);
-  xa = dasm_ffs(a); xb = dasm_ffs(b);
-  if (c) {
-    w = dasm_ffs(c) - xa;
-    if (w == 32) m = 0x0000000100000001UL;
-    else if (w == 16) m = 0x0001000100010001UL;
-    else if (w == 8) m = 0x0101010101010101UL;
-    else if (w == 4) m = 0x1111111111111111UL;
-    else if (w == 2) m = 0x5555555555555555UL;
-    else return -1;
-    s = (-2*w & 0x3f) - 1;
-  } else if (!a) {
-    return -1;
-  } else if (xb == -1) {
-    xb = 64;
-  }
-  if ((b-a) * m != n) return -1;
-  if (inv) {
-    return ((w - xb) << 6) | (s+w+xa-xb);
-  } else {
-    return ((w - xa) << 6) | (s+xb-xa);
-  }
-  return -1;
+  if ((n+1u) <= 1u) return -1;  /* Neither all-zero nor all-ones are allowed. */
+  rot = (n & (n+1u)) ? dasm_ctz(n & (n+1u)) : 64;
+  n = dasm_ror(n, rot & 63);
+  ones = dasm_ctz(~n);
+  size = dasm_clz(n) + ones;
+  if (dasm_ror(n, size & 63) != n) return -1;  /* Non-repeating? */
+  immr = -rot & (size - 1);
+  imms = (-(size << 1) | (ones - 1)) & 63;
+  return ((immr | (size & 64)) << 6) | imms;
 }
 
 /* Pass 1: Store actions and args, link branches/labels, estimate offsets. */
@@ -444,7 +441,7 @@ int dasm_encode(Dst_DECL, void *buffer)
 	  break;
 	case DASM_REL_LG:
 	  if (n < 0) {
-	    ptrdiff_t na = (ptrdiff_t)D->globals[-n] - (ptrdiff_t)cp + 4;
+	    ptrdiff_t na = (ptrdiff_t)D->globals[-n-10] - (ptrdiff_t)cp + 4;
 	    n = (int)na;
 	    CK((ptrdiff_t)n == na, RANGE_REL);
 	    goto patchrel;
@@ -475,7 +472,7 @@ int dasm_encode(Dst_DECL, void *buffer)
 	  }
 	  break;
 	case DASM_REL_A: {
-	  ptrdiff_t na = (((ptrdiff_t)(*b++) << 32) | (unsigned int)n);
+	  ptrdiff_t na = (ptrdiff_t)(((unsigned long long)(unsigned int)(*b++) << 32) | (unsigned int)n);
 	  if ((ins & 0x3000) == 0x3000) {  /* ADRP */
 	    ins &= ~0x1000;
 	    na = (na >> 12) - (((ptrdiff_t)cp - 4) >> 12);
@@ -487,7 +484,7 @@ int dasm_encode(Dst_DECL, void *buffer)
 	  goto patchrel;
 	}
 	case DASM_LABEL_LG:
-	  ins &= 2047; if (ins >= 20) D->globals[ins-10] = (void *)(base + n);
+	  ins &= 2047; if (ins >= 20) D->globals[ins-20] = (void *)(base + n);
 	  break;
 	case DASM_LABEL_PC: break;
 	case DASM_IMM:

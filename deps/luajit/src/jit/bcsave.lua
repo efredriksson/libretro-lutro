@@ -1,7 +1,7 @@
 ----------------------------------------------------------------------------
 -- LuaJIT module to save/list bytecode.
 --
--- Copyright (C) 2005-2022 Mike Pall. All rights reserved.
+-- Copyright (C) 2005-2026 Mike Pall. All rights reserved.
 -- Released under the MIT license. See Copyright Notice in luajit.h
 ----------------------------------------------------------------------------
 --
@@ -11,7 +11,7 @@
 ------------------------------------------------------------------------------
 
 local jit = require("jit")
-assert(jit.version_num == 20100, "LuaJIT core/library version mismatch")
+assert(jit.version_num == 20199, "LuaJIT core/library version mismatch")
 local bit = require("bit")
 
 -- Symbol name prefix for LuaJIT bytecode.
@@ -20,6 +20,7 @@ local LJBC_PREFIX = "luaJIT_BC_"
 local type, assert = type, assert
 local format = string.format
 local tremove, tconcat = table.remove, table.concat
+local bswap = bit.bswap
 
 ------------------------------------------------------------------------------
 
@@ -29,6 +30,9 @@ Save LuaJIT bytecode: luajit -b[options] input output
   -l        Only list bytecode.
   -s        Strip debug info (default).
   -g        Keep debug info.
+  -W        Generate 32 bit (non-GC64) bytecode.
+  -X        Generate 64 bit (GC64) bytecode.
+  -d        Generate bytecode in deterministic manner.
   -n name   Set module name (default: auto-detect from input name).
   -t type   Set output file type (default: auto-detect from output name).
   -a arch   Override architecture for object files (default: native).
@@ -38,7 +42,7 @@ Save LuaJIT bytecode: luajit -b[options] input output
   --        Stop handling options.
   -         Use stdin as input and/or stdout as output.
 
-File types: c h obj o raw (default)
+File types: c cc h obj o raw (default)
 ]]
   os.exit(1)
 end
@@ -51,8 +55,9 @@ local function check(ok, ...)
 end
 
 local function readfile(ctx, input)
-  if type(input) == "function" then return input end
-  if ctx.filename then
+  if ctx.string then
+    return check(loadstring(input, nil, ctx.mode))
+  elseif ctx.filename then
     local data
     if input == "-" then
       data = io.stdin:read("*a")
@@ -61,10 +66,10 @@ local function readfile(ctx, input)
       data = assert(fp:read("*a"))
       assert(fp:close())
     end
-    return check(load(data, ctx.filename))
+    return check(load(data, ctx.filename, ctx.mode))
   else
     if input == "-" then input = nil end
-    return check(loadfile(input))
+    return check(loadfile(input, ctx.mode))
   end
 end
 
@@ -81,7 +86,7 @@ end
 ------------------------------------------------------------------------------
 
 local map_type = {
-  raw = "raw", c = "c", h = "h", o = "obj", obj = "obj",
+  raw = "raw", c = "c", cc = "c", h = "h", o = "obj", obj = "obj",
 }
 
 local map_arch = {
@@ -107,7 +112,7 @@ local map_os = {
 local function checkarg(str, map, err)
   str = str:lower()
   local s = check(map[str], "unknown ", err)
-  return type(s) == "string" and s or str
+  return type(s) == "string" ? s : str
 end
 
 local function detecttype(str)
@@ -138,7 +143,7 @@ end
 
 local function bcsave_tail(fp, output, s)
   local ok, err = fp:write(s)
-  if ok and output ~= "-" then ok, err = fp:close() end
+  if ok and output != "-" then ok, err = fp:close() end
   check(ok, "cannot write ", output, ": ", err)
 end
 
@@ -161,6 +166,8 @@ extern "C"
 #endif
 #ifdef _WIN32
 __declspec(dllexport)
+#elif (defined(__ELF__) || defined(__MACH__) || defined(__psp2__)) && !((defined(__sun__) && defined(__svr4__)) || defined(__CELLOS_LV2__))
+__attribute__((visibility("default")))
 #endif
 const unsigned char %s%s[] = {
 ]], LJBC_PREFIX, ctx.modname))
@@ -173,12 +180,12 @@ static const unsigned char %s%s[] = {
   local t, n, m = {}, 0, 0
   for i=1,#s do
     local b = tostring(string.byte(s, i))
-    m = m + #b + 1
+    m += #b + 1
     if m > 78 then
       fp:write(tconcat(t, ",", 1, n), ",\n")
       n, m = 0, #b + 1
     end
-    n = n + 1
+    n += 1
     t[n] = b
   end
   bcsave_tail(fp, output, tconcat(t, ",", 1, n).."\n};\n")
@@ -242,19 +249,19 @@ typedef struct {
   -- Handle different host/target endianess.
   local function f32(x) return x end
   local f16, fofs = f32, f32
-  if ffi.abi("be") ~= isbe then
-    f32 = bit.bswap
-    function f16(x) return bit.rshift(bit.bswap(x), 16) end
+  if ffi.abi("be") != isbe then
+    f32 = bswap
+    function f16(x) return bswap(x) >> 16 end
     if is64 then
       local two32 = ffi.cast("int64_t", 2^32)
-      function fofs(x) return bit.bswap(x)*two32 end
+      function fofs(x) return bswap(x)*two32 end
     else
       fofs = f32
     end
   end
 
   -- Create ELF object and fill in header.
-  local o = ffi.new(is64 and "ELF64obj" or "ELF32obj")
+  local o = ffi.new(is64 ? "ELF64obj" : "ELF32obj")
   local hdr = o.hdr
   if ctx.os == "bsd" or ctx.os == "other" then -- Determine native hdr.eosabi.
     local bf = assert(io.open("/bin/ls", "rb"))
@@ -266,8 +273,8 @@ typedef struct {
     hdr.emagic = "\127ELF"
     hdr.eosabi = ({ freebsd=9, netbsd=2, openbsd=12, solaris=6 })[ctx.os] or 0
   end
-  hdr.eclass = is64 and 2 or 1
-  hdr.eendian = isbe and 2 or 1
+  hdr.eclass = is64 ? 2 : 1
+  hdr.eendian = isbe ? 2 : 1
   hdr.eversion = 1
   hdr.type = f16(1)
   hdr.machine = f16(ai.m)
@@ -288,7 +295,7 @@ typedef struct {
     sect.align = fofs(1)
     sect.name = f32(ofs)
     ffi.copy(o.space+ofs, name)
-    ofs = ofs + #name+1
+    ofs += #name+1
   end
   o.sect[1].type = f32(2) -- .symtab
   o.sect[1].link = f32(3)
@@ -308,7 +315,7 @@ typedef struct {
   o.sect[3].ofs = fofs(sofs + ofs)
   o.sect[3].size = fofs(#symname+2)
   ffi.copy(o.space+ofs+1, symname)
-  ofs = ofs + #symname + 2
+  ofs += #symname + 2
   o.sect[4].type = f32(1) -- .rodata
   o.sect[4].flags = fofs(2)
   o.sect[4].ofs = fofs(sofs + ofs)
@@ -375,8 +382,8 @@ typedef struct {
   local function f32(x) return x end
   local f16 = f32
   if ffi.abi("be") then
-    f32 = bit.bswap
-    function f16(x) return bit.rshift(bit.bswap(x), 16) end
+    f32 = bswap
+    function f16(x) return bswap(x) >> 16 end
   end
 
   -- Create PE object and fill in header.
@@ -416,7 +423,7 @@ typedef struct {
   o.strtabsize = f32(ofs + 4)
   o.sect[0].ofs = f32(ffi.offsetof(o, "space") + ofs)
   ffi.copy(o.space + ofs, symexport)
-  ofs = ofs + #symexport
+  ofs += #symexport
   o.sect[1].ofs = f32(ffi.offsetof(o, "space") + ofs)
 
   -- Write PE object file.
@@ -438,21 +445,9 @@ typedef struct
 typedef struct {
   uint32_t cmd, cmdsize;
   char segname[16];
-  uint32_t vmaddr, vmsize, fileoff, filesize;
-  uint32_t maxprot, initprot, nsects, flags;
-} mach_segment_command;
-typedef struct {
-  uint32_t cmd, cmdsize;
-  char segname[16];
   uint64_t vmaddr, vmsize, fileoff, filesize;
   uint32_t maxprot, initprot, nsects, flags;
 } mach_segment_command_64;
-typedef struct {
-  char sectname[16], segname[16];
-  uint32_t addr, size;
-  uint32_t offset, align, reloff, nreloc, flags;
-  uint32_t reserved1, reserved2;
-} mach_section;
 typedef struct {
   char sectname[16], segname[16];
   uint64_t addr, size;
@@ -465,139 +460,70 @@ typedef struct {
 typedef struct {
   int32_t strx;
   uint8_t type, sect;
-  int16_t desc;
-  uint32_t value;
-} mach_nlist;
-typedef struct {
-  int32_t strx;
-  uint8_t type, sect;
   uint16_t desc;
   uint64_t value;
 } mach_nlist_64;
-typedef struct
-{
-  int32_t magic, nfat_arch;
-} mach_fat_header;
-typedef struct
-{
-  int32_t cputype, cpusubtype, offset, size, align;
-} mach_fat_arch;
 typedef struct {
-  struct {
-    mach_header hdr;
-    mach_segment_command seg;
-    mach_section sec;
-    mach_symtab_command sym;
-  } arch[1];
-  mach_nlist sym_entry;
-  uint8_t space[4096];
-} mach_obj;
-typedef struct {
-  struct {
-    mach_header_64 hdr;
-    mach_segment_command_64 seg;
-    mach_section_64 sec;
-    mach_symtab_command sym;
-  } arch[1];
-  mach_nlist_64 sym_entry;
-  uint8_t space[4096];
+  mach_header_64 hdr;
+  mach_segment_command_64 seg;
+  mach_section_64 sec;
+  mach_symtab_command sym;
 } mach_obj_64;
 typedef struct {
-  mach_fat_header fat;
-  mach_fat_arch fat_arch[2];
-  struct {
-    mach_header hdr;
-    mach_segment_command seg;
-    mach_section sec;
-    mach_symtab_command sym;
-  } arch[2];
-  mach_nlist sym_entry;
-  uint8_t space[4096];
-} mach_fat_obj;
-typedef struct {
-  mach_fat_header fat;
-  mach_fat_arch fat_arch[2];
-  struct {
-    mach_header_64 hdr;
-    mach_segment_command_64 seg;
-    mach_section_64 sec;
-    mach_symtab_command sym;
-  } arch[2];
   mach_nlist_64 sym_entry;
   uint8_t space[4096];
-} mach_fat_obj_64;
+} mach_obj_64_tail;
 ]]
   local symname = '_'..LJBC_PREFIX..ctx.modname
-  local isfat, is64, align, mobj = false, false, 4, "mach_obj"
-  if ctx.arch == "x64" then
-    is64, align, mobj = true, 8, "mach_obj_64"
-  elseif ctx.arch == "arm" then
-    isfat, mobj = true, "mach_fat_obj"
-  elseif ctx.arch == "arm64" then
-    is64, align, isfat, mobj = true, 8, true, "mach_fat_obj_64"
-  else
-    check(ctx.arch == "x86", "unsupported architecture for OSX")
+  local cputype, cpusubtype = 0x01000007, 3
+  if ctx.arch != "x64" then
+    check(ctx.arch == "arm64", "unsupported architecture for OSX")
+    cputype, cpusubtype = 0x0100000c, 0
   end
-  local function aligned(v, a) return bit.band(v+a-1, -a) end
-  local be32 = bit.bswap -- Mach-O FAT is BE, supported archs are LE.
+  local function aligned(v, a) return v+a-1 & -a end
 
   -- Create Mach-O object and fill in header.
-  local o = ffi.new(mobj)
-  local mach_size = aligned(ffi.offsetof(o, "space")+#symname+2, align)
-  local cputype = ({ x86={7}, x64={0x01000007}, arm={7,12}, arm64={0x01000007,0x0100000c} })[ctx.arch]
-  local cpusubtype = ({ x86={3}, x64={3}, arm={3,9}, arm64={3,0} })[ctx.arch]
-  if isfat then
-    o.fat.magic = be32(0xcafebabe)
-    o.fat.nfat_arch = be32(#cpusubtype)
-  end
+  local o = ffi.new("mach_obj_64")
+  local t = ffi.new("mach_obj_64_tail")
+  local ofs_bc = ffi.sizeof(o)
+  local sz_bc = aligned(#s, 8)
+  local ofs_sym = ofs_bc + sz_bc
 
   -- Fill in sections and symbols.
-  for i=0,#cpusubtype-1 do
-    local ofs = 0
-    if isfat then
-      local a = o.fat_arch[i]
-      a.cputype = be32(cputype[i+1])
-      a.cpusubtype = be32(cpusubtype[i+1])
-      -- Subsequent slices overlap each other to share data.
-      ofs = ffi.offsetof(o, "arch") + i*ffi.sizeof(o.arch[0])
-      a.offset = be32(ofs)
-      a.size = be32(mach_size-ofs+#s)
-    end
-    local a = o.arch[i]
-    a.hdr.magic = is64 and 0xfeedfacf or 0xfeedface
-    a.hdr.cputype = cputype[i+1]
-    a.hdr.cpusubtype = cpusubtype[i+1]
-    a.hdr.filetype = 1
-    a.hdr.ncmds = 2
-    a.hdr.sizeofcmds = ffi.sizeof(a.seg)+ffi.sizeof(a.sec)+ffi.sizeof(a.sym)
-    a.seg.cmd = is64 and 0x19 or 0x1
-    a.seg.cmdsize = ffi.sizeof(a.seg)+ffi.sizeof(a.sec)
-    a.seg.vmsize = #s
-    a.seg.fileoff = mach_size-ofs
-    a.seg.filesize = #s
-    a.seg.maxprot = 1
-    a.seg.initprot = 1
-    a.seg.nsects = 1
-    ffi.copy(a.sec.sectname, "__data")
-    ffi.copy(a.sec.segname, "__DATA")
-    a.sec.size = #s
-    a.sec.offset = mach_size-ofs
-    a.sym.cmd = 2
-    a.sym.cmdsize = ffi.sizeof(a.sym)
-    a.sym.symoff = ffi.offsetof(o, "sym_entry")-ofs
-    a.sym.nsyms = 1
-    a.sym.stroff = ffi.offsetof(o, "sym_entry")+ffi.sizeof(o.sym_entry)-ofs
-    a.sym.strsize = aligned(#symname+2, align)
-  end
-  o.sym_entry.type = 0xf
-  o.sym_entry.sect = 1
-  o.sym_entry.strx = 1
-  ffi.copy(o.space+1, symname)
+  o.hdr.magic = 0xfeedfacf
+  o.hdr.cputype = cputype
+  o.hdr.cpusubtype = cpusubtype
+  o.hdr.filetype = 1
+  o.hdr.ncmds = 2
+  o.hdr.sizeofcmds = ffi.sizeof(o.seg)+ffi.sizeof(o.sec)+ffi.sizeof(o.sym)
+  o.seg.cmd = 0x19
+  o.seg.cmdsize = ffi.sizeof(o.seg)+ffi.sizeof(o.sec)
+  o.seg.vmsize = #s
+  o.seg.fileoff = ofs_bc
+  o.seg.filesize = #s
+  o.seg.maxprot = 1
+  o.seg.initprot = 1
+  o.seg.nsects = 1
+  ffi.copy(o.sec.sectname, "__data")
+  ffi.copy(o.sec.segname, "__DATA")
+  o.sec.size = #s
+  o.sec.offset = ofs_bc
+  o.sym.cmd = 2
+  o.sym.cmdsize = ffi.sizeof(o.sym)
+  o.sym.symoff = ofs_sym
+  o.sym.nsyms = 1
+  o.sym.stroff = ofs_sym + ffi.offsetof(t, "space")
+  o.sym.strsize = aligned(#symname+2, 8)
+  t.sym_entry.type = 0xf
+  t.sym_entry.sect = 1
+  t.sym_entry.strx = 1
+  ffi.copy(t.space+1, symname)
 
-  -- Write Macho-O object file.
+  -- Write Mach-O object file.
   local fp = savefile(output, "wb")
-  fp:write(ffi.string(o, mach_size))
-  bcsave_tail(fp, output, s)
+  fp:write(ffi.string(o, ofs_bc))
+  fp:write(s, ("\0"):rep(sz_bc - #s))
+  bcsave_tail(fp, output, ffi.string(t, ffi.offsetof(t, "space") + o.sym.strsize))
 end
 
 local function bcsave_obj(ctx, output, s)
@@ -624,7 +550,7 @@ end
 
 local function bcsave(ctx, input, output)
   local f = readfile(ctx, input)
-  local s = string.dump(f, ctx.strip)
+  local s = string.dump(f, ctx.mode)
   local t = ctx.type
   if not t then
     t = detecttype(output)
@@ -647,12 +573,14 @@ local function docmd(...)
   local n = 1
   local list = false
   local ctx = {
-    strip = true, arch = jit.arch, os = jit.os:lower(),
-    type = false, modname = false,
+    mode = "bt", arch = jit.arch, os = jit.os:lower(),
+    type = false, modname = false, string = false,
   }
+  local strip = "s"
+  local gc64 = ""
   while n <= #arg do
     local a = arg[n]
-    if type(a) == "string" and a:sub(1, 1) == "-" and a ~= "-" then
+    if type(a) == "string" and a:sub(1, 1) == "-" and a != "-" then
       tremove(arg, n)
       if a == "--" then break end
       for m=2,#a do
@@ -660,14 +588,18 @@ local function docmd(...)
 	if opt == "l" then
 	  list = true
 	elseif opt == "s" then
-	  ctx.strip = true
+	  strip = "s"
 	elseif opt == "g" then
-	  ctx.strip = false
+	  strip = ""
+	elseif opt == "W" or opt == "X" then
+	  gc64 = opt
+	elseif opt == "d" then
+	  ctx.mode = ctx.mode .. opt
 	else
-	  if arg[n] == nil or m ~= #a then usage() end
+	  if arg[n] == nil or m != #a then usage() end
 	  if opt == "e" then
-	    if n ~= 1 then usage() end
-	    arg[1] = check(loadstring(arg[1]))
+	    if n != 1 then usage() end
+	    ctx.string = true
 	  elseif opt == "n" then
 	    ctx.modname = checkmodname(tremove(arg, n))
 	  elseif opt == "t" then
@@ -684,14 +616,15 @@ local function docmd(...)
 	end
       end
     else
-      n = n + 1
+      n += 1
     end
   end
+  ctx.mode = ctx.mode .. strip .. gc64
   if list then
     if #arg == 0 or #arg > 2 then usage() end
     bclist(ctx, arg[1], arg[2] or "-")
   else
-    if #arg ~= 2 then usage() end
+    if #arg != 2 then usage() end
     bcsave(ctx, arg[1], arg[2])
   end
 end
