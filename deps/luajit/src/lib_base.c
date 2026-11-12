@@ -1,6 +1,6 @@
 /*
 ** Base and coroutine library.
-** Copyright (C) 2005-2022 Mike Pall. See Copyright Notice in luajit.h
+** Copyright (C) 2005-2026 Mike Pall. See Copyright Notice in luajit.h
 **
 ** Major portions taken verbatim or adapted from the Lua interpreter.
 ** Copyright (C) 1994-2011 Lua.org, PUC-Rio. See Copyright Notice in lua.h
@@ -146,6 +146,8 @@ LJLIB_CF(getfenv)		LJLIB_REC(.)
   cTValue *o = L->base;
   if (!(o < L->top && tvisfunc(o))) {
     int level = lj_lib_optint(L, 1, 1);
+    if (level < 0)
+      lj_err_arg(L, 1, LJ_ERR_INVLVL);
     o = lj_debug_frame(L, level, &level);
     if (o == NULL)
       lj_err_arg(L, 1, LJ_ERR_INVLVL);
@@ -168,6 +170,8 @@ LJLIB_CF(setfenv)
       setgcref(L->env, obj2gco(t));
       return 0;
     }
+    if (level < 0)
+      lj_err_arg(L, 1, LJ_ERR_INVLVL);
     o = lj_debug_frame(L, level, &level);
     if (o == NULL)
       lj_err_arg(L, 1, LJ_ERR_INVLVL);
@@ -220,7 +224,7 @@ LJLIB_CF(rawlen)		LJLIB_REC(.)
 }
 #endif
 
-LJLIB_CF(unpack)
+LJLIB_CF(unpack)		LJLIB_REC(.)
 {
   GCtab *t = lj_lib_checktab(L, 1);
   int32_t n, i = lj_lib_optint(L, 2, 1);
@@ -239,7 +243,9 @@ LJLIB_CF(unpack)
     } else {
       setnilV(L->top++);
     }
-  } while (i++ < e);
+    if (i >= e) break;
+    i++;
+  } while (1);
   return n;
 }
 
@@ -292,18 +298,18 @@ LJLIB_ASM(tonumber)		LJLIB_REC(.)
     const char *p = strdata(lj_lib_checkstr(L, 1));
     char *ep;
     unsigned int neg = 0;
-    unsigned long ul;
+    unsigned long long ul;
     if (base < 2 || base > 36)
       lj_err_arg(L, 2, LJ_ERR_BASERNG);
     while (lj_char_isspace((unsigned char)(*p))) p++;
     if (*p == '-') { p++; neg = 1; } else if (*p == '+') { p++; }
     if (lj_char_isalnum((unsigned char)(*p))) {
-      ul = strtoul(p, &ep, base);
+      ul = strtoull(p, &ep, base);
       if (p != ep) {
 	while (lj_char_isspace((unsigned char)(*ep))) ep++;
 	if (*ep == '\0') {
 	  if (LJ_DUALNUM && LJ_LIKELY(ul < 0x80000000u+neg)) {
-	    if (neg) ul = (unsigned long)-(long)ul;
+	    if (neg) ul = ~ul+1u;
 	    setintV(L->base-1-LJ_FR2, (int32_t)ul);
 	  } else {
 	    lua_Number n = (lua_Number)ul;
@@ -360,7 +366,11 @@ LJLIB_ASM_(xpcall)		LJLIB_REC(.)
 static int load_aux(lua_State *L, int status, int envarg)
 {
   if (status == LUA_OK) {
-    if (tvistab(L->base+envarg-1)) {
+    /*
+    ** Set environment table for top-level function.
+    ** Don't do this for non-native bytecode, which returns a prototype.
+    */
+    if (tvistab(L->base+envarg-1) && tvisfunc(L->top-1)) {
       GCfunc *fn = funcV(L->top-1);
       GCtab *t = tabV(L->base+envarg-1);
       setgcref(fn->c.env, obj2gco(t));
@@ -616,7 +626,10 @@ static int ffh_resume(lua_State *L, lua_State *co, int wrap)
     setstrV(L, L->base-LJ_FR2, lj_err_str(L, em));
     return FFH_RES(2);
   }
-  lj_state_growstack(co, (MSize)(L->top - L->base));
+  if (lj_state_cpgrowstack(co, (MSize)(L->top - L->base)) != LUA_OK) {
+    cTValue *msg = --co->top;
+    lj_err_callermsg(L, strVdata(msg));
+  }
   return FFH_RETRY;
 }
 
