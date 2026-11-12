@@ -57,7 +57,7 @@ jobs:
 #      - run: make WANT_JIT=1 platform=unix-armv7-neon-hardfloat -j4
 
   build_osx_x86_64:
-    runs-on: macos-latest
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - run:                 make -j4 platform=osx config=tool
@@ -71,13 +71,13 @@ jobs:
       - run: git clean -f && make -j4 platform=osx config=player
 
   build_osx_jit:
-    runs-on: macos-latest
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - run:                 make -j4 platform=osx config=player WANT_JIT=1 MACOSX_DEPLOYMENT_TARGET=12.6
 
   build_osx_luasocket:
-    runs-on: macos-latest
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - run:                 make -j4 platform=osx config=player WANT_LUASOCKET=1 
